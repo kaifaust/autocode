@@ -22,6 +22,8 @@ EXCLUDE_DIRS = [
 # Whitelist Configuration. Only applicable when USE_BLACKLIST is False
 EXCLUDE_FILES = [
     "package-lock.json",
+    "gpt.basic.log",
+    "gpt.verbose.log",
     # Add more file paths to exclude as needed
 ]
 
