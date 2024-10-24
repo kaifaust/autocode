@@ -15,6 +15,7 @@ USE_BLACKLIST = True  # Set to False to use whitelist mode
 # Blacklist Configuration. Only applicable when USE_BLACKLIST is True
 EXCLUDE_DIRS = [
     "node_modules/",
+    ".git/",
     # Add more directories to exclude as needed
 ]
 
