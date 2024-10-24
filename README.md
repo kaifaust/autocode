@@ -14,4 +14,10 @@ I built this to help me generate code for my projects faster, and the user exper
 4. Run the script `python autocode.py`
 5. Add `gpt.basic.log` and `gpt.verbose.log` to your `.gitignore` file to avoid committing them.
 
+## Example
+
+![Example](./example.png)
+
+## Contributing
+
 If you want to contribute, feel free to open a PR.
