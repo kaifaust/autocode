@@ -63,7 +63,7 @@ INCLUDE_FILES = [
 ]
 
 # ----- OpenAI API Settings -----
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "" # Source from .env or add your key here
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""  # Source from .env or add your key here
 GPT_MODEL = "gpt-4o-mini"
 GPT_MAX_RETRIES = 3
 GPT_TEMPERATURE = 0.2
@@ -71,8 +71,9 @@ GPT_MAX_TOKENS = 3000
 
 # ----- GPT System Message -----
 GPT_SYSTEM_MESSAGE = (
-    "You are a programmer that can modifies code based on user instructions. "
+    "You are a programmer that can modify code based on user instructions. "
     "For files that you modify, print the entire file with the changes. "
+    "To delete files, use the format '### Delete: <file_path>'. "
     "Do not add code comments that describe changes."
 )
 
@@ -85,7 +86,6 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 # ----- File Processing Settings -----
 ROOT_DIRECTORY = "."  # Root directory to start processing files
-
 
 # ==============================
 #           FUNCTIONS
@@ -301,6 +301,8 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
         "```<language>\n"
         "<modified_code>\n"
         "```\n\n"
+        "If you need to delete a file, use the following format:\n\n"
+        "### Delete: <file_path>\n"
     )
 
     logging.debug("Preparing to send the following user message to OpenAI API:")
@@ -335,20 +337,48 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
 
 def parse_gpt_response(response_text):
     """
-    Parse the GPT response to extract modified code for each file.
+    Parse the GPT response to extract modified code for each file and files to delete.
     """
-    pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
-    matches = re.finditer(pattern, response_text, re.DOTALL)
+    modified_pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
+    delete_pattern = r"### Delete: (?P<file>.+)"
+
+    modified_matches = re.finditer(modified_pattern, response_text, re.DOTALL)
+    delete_matches = re.finditer(delete_pattern, response_text, re.DOTALL)
+
     modified_files = {}
-    for match in matches:
+    files_to_delete = []
+
+    for match in modified_matches:
         raw_file_path = match.group("file").strip()
         file_path = os.path.normpath(raw_file_path)
         code = match.group("code")
         modified_files[file_path] = code
         logging.debug(f"Parsed modification for file: {file_path}")
 
+    for match in delete_matches:
+        raw_file_path = match.group("file").strip()
+        file_path = os.path.normpath(raw_file_path)
+        files_to_delete.append(file_path)
+        logging.debug(f"Parsed deletion request for file: {file_path}")
+
     logging.info(f"Total modified files parsed: {len(modified_files)}")
-    return modified_files
+    logging.info(f"Total files to delete parsed: {len(files_to_delete)}")
+    return modified_files, files_to_delete
+
+def delete_files(root_directory, files_to_delete):
+    """
+    Delete the specified files from the filesystem.
+    """
+    for file_path in files_to_delete:
+        absolute_path = os.path.join(root_directory, file_path)
+        if os.path.isfile(absolute_path):
+            try:
+                os.remove(absolute_path)
+                logging.info(f"Successfully deleted file: {file_path}")
+            except Exception as e:
+                logging.error(f"Error deleting file {file_path}: {str(e)}")
+        else:
+            logging.warning(f"File to delete does not exist: {file_path}")
 
 # ==============================
 #             MAIN
@@ -385,20 +415,27 @@ def main():
     gpt_response = call_gpt_api(prompt, files_content)
 
     logging.info("Parsing GPT response...")
-    modified_files = parse_gpt_response(gpt_response)
+    modified_files, files_to_delete = parse_gpt_response(gpt_response)
 
-    if not modified_files:
-        logging.warning("No modifications received from GPT. Exiting.")
-        return
+    # Apply modifications to files
+    if modified_files:
+        for file_path, new_content in modified_files.items():
+            if file_path in files_content:
+                absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
+                write_file_content(absolute_path, new_content)
+                logging.info(f"File {file_path} has been updated.")
+                logging.debug(f"Updated content for {file_path}:\n{new_content}")
+            else:
+                logging.warning(f"Received modification for unknown file {file_path}. Skipping.")
+    else:
+        logging.info("No file modifications to apply.")
 
-    for file_path, new_content in modified_files.items():
-        if file_path in files_content:
-            absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
-            write_file_content(absolute_path, new_content)
-            logging.info(f"File {file_path} has been updated.")
-            logging.debug(f"Updated content for {file_path}:\n{new_content}")
-        else:
-            logging.warning(f"Received modification for unknown file {file_path}. Skipping.")
+    # Delete specified files
+    if files_to_delete:
+        logging.info("Deleting specified files...")
+        delete_files(ROOT_DIRECTORY, files_to_delete)
+    else:
+        logging.info("No files to delete.")
 
     logging.info("All applicable files have been processed and updated.")
 
