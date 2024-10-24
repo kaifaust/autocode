@@ -6,6 +6,10 @@ Autocode is a Python script that uses OpenAI models to generate and apply code a
 
 I built this to help me generate code for my projects faster, and the user experience of IDEs like Cursor don't cut it for me.
 
+## Warning
+
+This is designed for projects using version control. It will make changes to your files without warning or confirmation.
+
 ## Instructions
 
 1. Add autocode.py to your project root directory.
