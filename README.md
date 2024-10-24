@@ -12,3 +12,6 @@ I built this to help me generate code for my projects faster, and the user exper
 2. Set the OPENAI_API_KEY environment variable in your terminal environment or set it in the autocode.py file.
 3. Install openai `pip install openai`
 4. Run the script `python autocode.py`
+5. Add `gpt.basic.log` and `gpt.verbose.log` to your `.gitignore` file to avoid committing them.
+
+If you want to contribute, feel free to open a PR.
