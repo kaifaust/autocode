@@ -22,8 +22,6 @@ EXCLUDE_DIRS = [
 # Whitelist Configuration. Only applicable when USE_BLACKLIST is False
 EXCLUDE_FILES = [
     "package-lock.json",
-    "gpt.basic.log",
-    "gpt.verbose.log",
     # Add more file paths to exclude as needed
 ]
 
@@ -76,7 +74,6 @@ GPT_MAX_TOKENS = 3000
 GPT_SYSTEM_MESSAGE = (
     "You are a programmer that can modify code based on user instructions. "
     "For files that you modify, print the entire file with the changes. "
-    "To delete files, use the format '### Delete: <file_path>'. "
     "Do not add code comments that describe changes."
 )
 
@@ -89,6 +86,10 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 
 # ----- File Processing Settings -----
 ROOT_DIRECTORY = "."  # Root directory to start processing files
+
+# ----- Cost Estimation Settings -----
+COST_PER_INPUT_TOKEN = 2.50 / 1_000_000  # $2.50 per 1M input tokens
+COST_PER_OUTPUT_TOKEN = 10.00 / 1_000_000  # $10.00 per 1M output tokens
 
 # ==============================
 #           FUNCTIONS
@@ -283,6 +284,7 @@ def get_language(file_path):
 def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RETRIES):
     """
     Call the OpenAI GPT API with the given prompt and files content.
+    Returns the response text and token usage.
     """
     if not OPENAI_API_KEY:
         logging.error("OPENAI_API_KEY environment variable not set.")
@@ -304,8 +306,6 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
         "```<language>\n"
         "<modified_code>\n"
         "```\n\n"
-        "If you need to delete a file, use the following format:\n\n"
-        "### Delete: <file_path>\n"
     )
 
     logging.debug("Preparing to send the following user message to OpenAI API:")
@@ -326,7 +326,7 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
             logging.info("Successfully received response from OpenAI API.")
             logging.debug("OpenAI API response:")
             logging.debug(response.choices[0].message.content)
-            return response.choices[0].message.content
+            return response.choices[0].message.content, response.usage
         except Exception as e:
             logging.error(f"Error during API call: {e}. Retrying after delay...")
             logging.debug(f"Exception details: {e}")
@@ -340,48 +340,20 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
 
 def parse_gpt_response(response_text):
     """
-    Parse the GPT response to extract modified code for each file and files to delete.
+    Parse the GPT response to extract modified code for each file.
     """
-    modified_pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
-    delete_pattern = r"### Delete: (?P<file>.+)"
-
-    modified_matches = re.finditer(modified_pattern, response_text, re.DOTALL)
-    delete_matches = re.finditer(delete_pattern, response_text, re.DOTALL)
-
+    pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
+    matches = re.finditer(pattern, response_text, re.DOTALL)
     modified_files = {}
-    files_to_delete = []
-
-    for match in modified_matches:
+    for match in matches:
         raw_file_path = match.group("file").strip()
         file_path = os.path.normpath(raw_file_path)
         code = match.group("code")
         modified_files[file_path] = code
         logging.debug(f"Parsed modification for file: {file_path}")
 
-    for match in delete_matches:
-        raw_file_path = match.group("file").strip()
-        file_path = os.path.normpath(raw_file_path)
-        files_to_delete.append(file_path)
-        logging.debug(f"Parsed deletion request for file: {file_path}")
-
     logging.info(f"Total modified files parsed: {len(modified_files)}")
-    logging.info(f"Total files to delete parsed: {len(files_to_delete)}")
-    return modified_files, files_to_delete
-
-def delete_files(root_directory, files_to_delete):
-    """
-    Delete the specified files from the filesystem.
-    """
-    for file_path in files_to_delete:
-        absolute_path = os.path.join(root_directory, file_path)
-        if os.path.isfile(absolute_path):
-            try:
-                os.remove(absolute_path)
-                logging.info(f"Successfully deleted file: {file_path}")
-            except Exception as e:
-                logging.error(f"Error deleting file {file_path}: {str(e)}")
-        else:
-            logging.warning(f"File to delete does not exist: {file_path}")
+    return modified_files
 
 # ==============================
 #             MAIN
@@ -415,32 +387,42 @@ def main():
         return
 
     logging.info("Calling OpenAI GPT API to process code changes...")
-    gpt_response = call_gpt_api(prompt, files_content)
+    gpt_response, usage = call_gpt_api(prompt, files_content)
 
     logging.info("Parsing GPT response...")
-    modified_files, files_to_delete = parse_gpt_response(gpt_response)
+    modified_files = parse_gpt_response(gpt_response)
 
-    # Apply modifications to files
-    if modified_files:
-        for file_path, new_content in modified_files.items():
-            if file_path in files_content:
-                absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
-                write_file_content(absolute_path, new_content)
-                logging.info(f"File {file_path} has been updated.")
-                logging.debug(f"Updated content for {file_path}:\n{new_content}")
-            else:
-                logging.warning(f"Received modification for unknown file {file_path}. Skipping.")
-    else:
-        logging.info("No file modifications to apply.")
+    if not modified_files:
+        logging.warning("No modifications received from GPT. Exiting.")
+        return
 
-    # Delete specified files
-    if files_to_delete:
-        logging.info("Deleting specified files...")
-        delete_files(ROOT_DIRECTORY, files_to_delete)
-    else:
-        logging.info("No files to delete.")
+    for file_path, new_content in modified_files.items():
+        if file_path in files_content:
+            absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
+            write_file_content(absolute_path, new_content)
+            logging.info(f"File {file_path} has been updated.")
+            logging.debug(f"Updated content for {file_path}:\n{new_content}")
+        else:
+            logging.warning(f"Received modification for unknown file {file_path}. Skipping.")
 
     logging.info("All applicable files have been processed and updated.")
+
+    # ----- Cost Estimation -----
+    if usage is not None:
+        prompt_tokens = getattr(usage, 'prompt_tokens', 0)
+        completion_tokens = getattr(usage, 'completion_tokens', 0)
+
+        cost_input = prompt_tokens * COST_PER_INPUT_TOKEN
+        cost_output = completion_tokens * COST_PER_OUTPUT_TOKEN
+        total_cost = cost_input + cost_output
+
+        # Format the cost to two decimal places
+        formatted_cost = "${:,.2f}".format(total_cost)
+
+        print(f"\nEstimated cost of this prompt: {formatted_cost}")
+        logging.info(f"Estimated cost of this prompt: {formatted_cost}")
+    else:
+        logging.warning("No usage information available for cost estimation.")
 
 if __name__ == "__main__":
     main()
