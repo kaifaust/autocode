@@ -19,7 +19,6 @@ EXCLUDE_DIRS = [
     # Add more directories to exclude as needed
 ]
 
-# Whitelist Configuration. Only applicable when USE_BLACKLIST is False
 EXCLUDE_FILES = [
     "package-lock.json",
     # Add more file paths to exclude as needed
@@ -58,7 +57,6 @@ INCLUDE_DIRS = [
     # Add more directories to include as needed
 ]
 
-# Whitelist Configuration. Only applicable when USE_BLACKLIST is False
 INCLUDE_FILES = [
     # Add specific file paths to include if needed
 ]
@@ -348,8 +346,8 @@ def parse_gpt_response(response_text):
     """
     # Pattern to match modified files
     file_pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
-    # Pattern to match files to delete
-    delete_pattern = r"### DELETE: (?P<file>.+?)\n"
+    # Updated pattern to match files to delete, allowing for end of string
+    delete_pattern = r"### DELETE: (?P<file>.+?)(?:\n|$)"
 
     modified_files = {}
     files_to_delete = []
