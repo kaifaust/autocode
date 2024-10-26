@@ -5,189 +5,108 @@ import re
 from pathlib import Path
 import time
 from openai import OpenAI
+import shutil
 
 # ==============================
-#         CONFIGURATION
+#           CONFIGURATION
 # ==============================
 
-USE_BLACKLIST = True  # Set to False to use whitelist mode
-
-# Blacklist Configuration. Only applicable when USE_BLACKLIST is True
-EXCLUDE_DIRS = [
-    "node_modules/",
-    ".git/",
-    # Add more directories to exclude as needed
-]
-
-EXCLUDE_FILES = [
-    "package-lock.json",
-    # Add more file paths to exclude as needed
-]
-
-EXCLUDE_EXTENSIONS = [
-    ".log",
-    ".tmp",
-    ".pyc",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".bmp",
-    ".svg",
-    ".ico",
-    ".pdf",
-    ".zip",
-    ".tar",
-    ".gz",
-    ".rar",
-    ".7z",
-    ".exe",
-    ".dll",
-    ".so",
-    ".dylib",
-    ".bin",
-    ".dat",
-    ".iso",
-    # Add more extensions as needed
-]
-
-# Whitelist Configuration. Only applicable when USE_BLACKLIST is False
-INCLUDE_DIRS = [
-    "src",  # Example: Include only the 'src' directory
-    # Add more directories to include as needed
-]
-
-INCLUDE_FILES = [
-    # Add specific file paths to include if needed
-]
-
-# ----- OpenAI API Settings -----
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or ""  # Source from .env or add your key here
-GPT_MODEL = "gpt-4o-mini"
-GPT_MAX_RETRIES = 3
-GPT_TEMPERATURE = 0.2
+ROOT_DIRECTORY = '.'
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+GPT_MODEL = 'gpt-4o-mini'
 GPT_MAX_TOKENS = 3000
+GPT_TEMPERATURE = 0.2
+COST_PER_INPUT_TOKEN = 2.50 / 1000000 # $2.50 per 1M input tokens
+COST_PER_OUTPUT_TOKEN = 10.00 / 1000000 # $10.00 per 1M output tokens
+USE_BLACKLIST = True
+EXCLUDE_DIRS = ['.git', 'node_modules']
+EXCLUDE_FILES = ['package-lock.json', 'autocode.py']
+EXCLUDE_EXTENSIONS = ['.log', '.png']
+INCLUDE_DIRS = []
+INCLUDE_FILES = []
 
-# ----- GPT System Message -----
-GPT_SYSTEM_MESSAGE = (
-    "You are a programmer that can modify code based on user instructions. "
-    "For files that you modify, print the entire file with the changes. "
-    "Additionally, if any files need to be deleted, specify them using the following format:\n\n"
-    "### DELETE: <file_path>\n"
-    "Do not add code comments that describe changes."
-)
-
-# ----- Logging Settings -----
-BASIC_LOG_FILE = "gpt.basic.log"
-VERBOSE_LOG_FILE = "gpt.verbose.log"
-LOG_LEVEL_BASIC = logging.INFO
-LOG_LEVEL_VERBOSE = logging.DEBUG
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-
-# ----- File Processing Settings -----
-ROOT_DIRECTORY = "."  # Root directory to start processing files
-
-# ----- Cost Estimation Settings -----
-COST_PER_INPUT_TOKEN = 2.50 / 1_000_000  # $2.50 per 1M input tokens
-COST_PER_OUTPUT_TOKEN = 10.00 / 1_000_000  # $10.00 per 1M output tokens
+# System message for GPT
+GPT_SYSTEM_MESSAGE = """You are an artificial intelligence agent that codes.
+"""
 
 # ==============================
-#           FUNCTIONS
+#            LOGGING
 # ==============================
 
 def setup_logging():
-    """
-    Configure the logging settings with two separate log files:
-    - gpt.basic.log for basic logs
-    - gpt.verbose.log for detailed logs
-    """
-    # Create a root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)  # Set to lowest level to capture all logs
+    logging.basicConfig(
+        filename='gpt.log',
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+    console.setFormatter(formatter)
+    logging.getLogger('').addHandler(console)
 
-    # Formatter
-    formatter = logging.Formatter(LOG_FORMAT)
-
-    # Basic File Handler
-    basic_handler = logging.FileHandler(BASIC_LOG_FILE)
-    basic_handler.setLevel(LOG_LEVEL_BASIC)
-    basic_handler.setFormatter(formatter)
-    logger.addHandler(basic_handler)
-
-    # Verbose File Handler
-    verbose_handler = logging.FileHandler(VERBOSE_LOG_FILE)
-    verbose_handler.setLevel(LOG_LEVEL_VERBOSE)
-    verbose_handler.setFormatter(formatter)
-    logger.addHandler(verbose_handler)
-
-    # Stream Handler (Console)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setLevel(LOG_LEVEL_BASIC)  # Adjust as needed
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+# ==============================
+#          FILE HANDLING
+# ==============================
 
 def read_file_content(file_path):
     """
-    Read the content of a file and return it as a string.
+    Read the content of a file. Returns None if there's an error.
     """
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        logging.error(f"File {file_path} not found.")
-        return None
-    except UnicodeDecodeError:
-        logging.error(f"File {file_path} is a binary file or contains invalid characters. Skipping.")
-        return None
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return content
     except Exception as e:
         logging.error(f"Error reading {file_path}: {str(e)}")
         return None
 
 def write_file_content(file_path, content):
     """
-    Write the given content to a file, ensuring it ends with a newline.
+    Write content to a file. Creates the file if it doesn't exist.
     """
     try:
-        if not content.endswith('\n'):
-            content += '\n'
-        with open(file_path, "w", encoding="utf-8") as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         logging.info(f"Successfully wrote to {file_path}")
     except Exception as e:
         logging.error(f"Error writing to {file_path}: {str(e)}")
 
-def get_all_files(root_dir, exclude_dirs=None, exclude_files=None, include_dirs=None, include_files=None, use_blacklist=True):
+# ==============================
+#        FILE FILTERING
+# ==============================
+
+def get_all_files(ROOT_DIRECTORY, exclude_dirs=None, exclude_files=None, include_dirs=None, include_files=None, use_blacklist=True):
     """
-    Recursively get all file paths from the root directory, excluding or including specified directories and files.
+    Recursively get all file paths under ROOT_DIRECTORY.
+    Apply exclusion or inclusion based on the mode.
     """
     all_files = []
-    exclude_dirs = [os.path.normpath(path) for path in (exclude_dirs or [])]
-    exclude_files = [os.path.normpath(path) for path in (exclude_files or [])]
-    include_dirs = [os.path.normpath(path) for path in (include_dirs or [])]
-    include_files = [os.path.normpath(path) for path in (include_files or [])]
+    for dirpath, dirnames, filenames in os.walk(ROOT_DIRECTORY):
+        # Compute relative path from ROOT_DIRECTORY
+        rel_dir = os.path.relpath(dirpath, ROOT_DIRECTORY)
+        if rel_dir == '.':
+            rel_dir = ''
 
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        # Normalize the current directory path relative to root_dir
-        rel_dir = os.path.relpath(dirpath, root_dir)
-        if rel_dir == ".":
-            rel_dir = ""
+        # Exclude directories if in blacklist mode
+        if use_blacklist and exclude_dirs:
+            dirnames[:] = [d for d in dirnames if os.path.join(rel_dir, d) not in exclude_dirs]
 
-        # Handle Blacklist or Whitelist Mode
-        if use_blacklist:
-            # Exclude directories
-            dirnames[:] = [d for d in dirnames if os.path.normpath(os.path.join(rel_dir, d)) not in exclude_dirs]
-        else:
-            # Whitelist Mode: Only include specified directories
-            dirnames[:] = [d for d in dirnames if os.path.normpath(os.path.join(rel_dir, d)) in include_dirs or not include_dirs]
+        # Include only specified directories if in whitelist mode
+        if not use_blacklist and include_dirs:
+            dirnames[:] = [d for d in dirnames if os.path.join(rel_dir, d) in include_dirs]
 
         for filename in filenames:
             file_rel_path = os.path.normpath(os.path.join(rel_dir, filename))
-
             if use_blacklist:
-                # Exclude files in excluded directories or specific excluded files
-                if any(file_rel_path.startswith(excl_dir + os.sep) for excl_dir in exclude_dirs):
+                # Blacklist Mode: Exclude specified directories or files
+                if exclude_files and file_rel_path in exclude_files:
                     continue
-                if file_rel_path in exclude_files:
+                if exclude_dirs and any(file_rel_path.startswith(inc_dir + os.sep) for inc_dir in exclude_dirs):
+                    continue
+                # Further filter out files based on excluded extensions
+                if EXCLUDE_EXTENSIONS and any(file_rel_path.lower().endswith(ext.lower()) for ext in EXCLUDE_EXTENSIONS):
                     continue
             else:
                 # Whitelist Mode: Include only specified directories or files
@@ -201,13 +120,13 @@ def get_all_files(root_dir, exclude_dirs=None, exclude_files=None, include_dirs=
     logging.info(f"Total files to process: {len(all_files)}")
     return all_files
 
-def get_files_to_process(root_directory, use_blacklist=True):
+def get_files_to_process(ROOT_DIRECTORY, use_blacklist=True):
     """
     Determine which files to process based on blacklist or whitelist.
     """
     if use_blacklist:
         files = get_all_files(
-            root_directory,
+            ROOT_DIRECTORY,
             exclude_dirs=EXCLUDE_DIRS,
             exclude_files=EXCLUDE_FILES,
             use_blacklist=True
@@ -222,7 +141,7 @@ def get_files_to_process(root_directory, use_blacklist=True):
         logging.info(f"Using blacklist mode with {len(files)} files after exclusions.")
     else:
         files = get_all_files(
-            root_directory,
+            ROOT_DIRECTORY,
             include_dirs=INCLUDE_DIRS,
             include_files=INCLUDE_FILES,
             use_blacklist=False
@@ -232,7 +151,7 @@ def get_files_to_process(root_directory, use_blacklist=True):
 
     existing_files = []
     for file_path in files:
-        absolute_path = os.path.join(root_directory, file_path)
+        absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
         if os.path.isfile(absolute_path):
             existing_files.append(file_path)
         else:
@@ -241,6 +160,10 @@ def get_files_to_process(root_directory, use_blacklist=True):
     logging.info(f"Existing files to process: {len(existing_files)}")
 
     return existing_files
+
+# ==============================
+#        USER PROMPT
+# ==============================
 
 def get_user_prompt():
     """
@@ -260,6 +183,10 @@ def get_user_prompt():
     prompt = "\n".join(lines)
     logging.info("User has provided the code change instructions.")
     return prompt
+
+# ==============================
+#      LANGUAGE DETECTION
+# ==============================
 
 def get_language(file_path):
     """
@@ -281,7 +208,11 @@ def get_language(file_path):
     ext = Path(file_path).suffix.lower()
     return language_mapping.get(ext, "")
 
-def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RETRIES):
+# ==============================
+#        GPT API CALL
+# ==============================
+
+def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=5):
     """
     Call the OpenAI GPT API with the given prompt and files content.
     Returns the response text and token usage.
@@ -308,6 +239,10 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
         "```\n\n"
         "If any files need to be deleted, specify them using the following format:\n\n"
         "### DELETE: <file_path>\n"
+        "Do not respond to files that do not need to be modified.\n"
+        "For files that do not need to be modified, do not respond at all.\n"
+        "For files that need to be modified, respond with the entire modified code without truncation or anything less than the entire file.\n"
+        "Do not add code comments that describe changes. For example, writing '// Changed the function name' is not allowed."
     )
 
     logging.debug("Preparing to send the following user message to OpenAI API:")
@@ -340,17 +275,21 @@ def call_gpt_api(prompt, files_content, model=GPT_MODEL, max_retries=GPT_MAX_RET
     logging.critical("Failed to get a response from OpenAI API after multiple attempts.")
     sys.exit(1)
 
+# ==============================
+#        GPT RESPONSE PARSING
+# ==============================
+
 def parse_gpt_response(response_text):
     """
     Parse the GPT response to extract modified code for each file and files to delete.
     """
     # Pattern to match modified files
     file_pattern = r"### File: (?P<file>.+?)\n```(?P<language>\w+)?\n(?P<code>.*?)\n```"
-    # Updated pattern to match files to delete, allowing for end of string
-    delete_pattern = r"### DELETE: (?P<file>.+?)(?:\n|$)"
+    # Updated pattern to match files to delete, anchored to the start of a line
+    delete_pattern = r"^### DELETE: (?P<file>.+)$"
 
     modified_files = {}
-    files_to_delete = []
+    files_to_delete = set()  # Use a set to avoid duplicate deletions
 
     # Parse modified files
     for match in re.finditer(file_pattern, response_text, re.DOTALL):
@@ -361,33 +300,43 @@ def parse_gpt_response(response_text):
         logging.debug(f"Parsed modification for file: {file_path}")
 
     # Parse files to delete
-    for match in re.finditer(delete_pattern, response_text, re.DOTALL):
+    for match in re.finditer(delete_pattern, response_text, re.MULTILINE):
         raw_file_path = match.group("file").strip()
         file_path = os.path.normpath(raw_file_path)
-        files_to_delete.append(file_path)
+        files_to_delete.add(file_path)  # Add to set to ensure uniqueness
         logging.debug(f"Parsed deletion instruction for file: {file_path}")
 
     logging.info(f"Total modified files parsed: {len(modified_files)}")
     logging.info(f"Total files to delete parsed: {len(files_to_delete)}")
-    return modified_files, files_to_delete
+    return modified_files, list(files_to_delete)
 
-def delete_files(root_directory, files_to_delete):
+# ==============================
+#          DELETE FILES
+# ==============================
+
+def delete_files(ROOT_DIRECTORY, files_to_delete):
     """
-    Delete the specified files from the filesystem.
+    Delete the specified files or directories from the filesystem.
     """
     for file_path in files_to_delete:
-        absolute_path = os.path.join(root_directory, file_path)
+        absolute_path = os.path.join(ROOT_DIRECTORY, file_path)
         if os.path.isfile(absolute_path):
             try:
                 os.remove(absolute_path)
                 logging.info(f"Deleted file: {file_path}")
             except Exception as e:
-                logging.error(f"Error deleting {file_path}: {str(e)}")
+                logging.error(f"Error deleting file {file_path}: {str(e)}")
+        elif os.path.isdir(absolute_path):
+            try:
+                shutil.rmtree(absolute_path)
+                logging.info(f"Deleted directory and its contents: {file_path}")
+            except Exception as e:
+                logging.error(f"Error deleting directory {file_path}: {str(e)}")
         else:
-            logging.warning(f"File to delete does not exist: {file_path}")
+            logging.warning(f"File or directory to delete does not exist: {file_path}")
 
 # ==============================
-#             MAIN
+#            MAIN
 # ==============================
 
 def main():
